@@ -1,0 +1,154 @@
+#include <Arduino.h>
+
+// ---------- MOTORES (TB6612) ----------
+#define PWMA 23
+#define AIN1 18
+#define AIN2 19
+#define PWMB 25
+#define BIN1 26
+#define BIN2 27
+#define STBY 4
+
+// ---------- SERVOS SG90 ----------
+#define SERVO1 32  // Desvío Caja Dañada
+#define SERVO2 33  // Desvío Producto No Esperado
+
+#define PIN_LED_STATUS 2
+
+// CONTROL DE VELOCIDAD BANDA (0 - 255)
+int VELOCIDAD = 60;
+
+const int PWM_FREQ = 20000;
+const int PWM_RES = 8;
+
+// Config PWM de servos: 50 Hz, 14 bits (compatible con ESP32 core v3+)
+const int SERVO_FREQ = 50;
+const int SERVO_RES = 14;
+
+// Ángulos de trabajo de los servos
+const int ANGULO_REPOSO = 0;
+const int ANGULO_DESVIO = 90;
+const int TIEMPO_EMPUJE_MS = 1200;
+
+// Convierte ángulo (0° a 180°) a ciclo de trabajo de 14 bits (0 - 16383) a 50 Hz
+uint32_t anguloADuty14Bits(int angulo) {
+  angulo = constrain(angulo, 0, 180);
+  // Pulso estándar SG90: 500 us (0°) a 2400 us (180°) en periodo de 20000 us
+  uint32_t pulsoUs = map(angulo, 0, 180, 500, 2400);
+  return (uint32_t)((pulsoUs * 16383UL) / 20000UL);
+}
+
+void moverServo1(int angulo) {
+  ledcWrite(SERVO1, anguloADuty14Bits(angulo));
+}
+
+void moverServo2(int angulo) {
+  ledcWrite(SERVO2, anguloADuty14Bits(angulo));
+}
+
+void encenderBanda(int vel) {
+  digitalWrite(STBY, HIGH);
+  // Motor A adelante
+  digitalWrite(AIN1, HIGH);
+  digitalWrite(AIN2, LOW);
+  ledcWrite(PWMA, vel);
+
+  // Motor B adelante
+  digitalWrite(BIN1, HIGH);
+  digitalWrite(BIN2, LOW);
+  ledcWrite(PWMB, vel);
+}
+
+void detenerBanda() {
+  ledcWrite(PWMA, 0);
+  ledcWrite(PWMB, 0);
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW);
+  digitalWrite(BIN1, LOW);
+  digitalWrite(BIN2, LOW);
+  digitalWrite(STBY, LOW);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT);
+  pinMode(BIN2, OUTPUT);
+  pinMode(STBY, OUTPUT);
+  pinMode(PIN_LED_STATUS, OUTPUT);
+
+  // Configurar canales PWM para motores (ESP32 Arduino Core 3.x)
+  ledcAttach(PWMA, PWM_FREQ, PWM_RES);
+  ledcAttach(PWMB, PWM_FREQ, PWM_RES);
+
+  // Configurar canales PWM de 50 Hz y 14 bits para servos SG90
+  ledcAttach(SERVO1, SERVO_FREQ, SERVO_RES);
+  ledcAttach(SERVO2, SERVO_FREQ, SERVO_RES);
+
+  // Posición inicial de servos y arranque de banda
+  moverServo1(ANGULO_REPOSO);
+  moverServo2(ANGULO_REPOSO);
+  encenderBanda(VELOCIDAD);
+
+  // Parpadeo de confirmación de inicio
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(PIN_LED_STATUS, HIGH);
+    delay(100);
+    digitalWrite(PIN_LED_STATUS, LOW);
+    delay(100);
+  }
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    char cmd = Serial.read();
+
+    if (cmd == '\n' || cmd == '\r' || cmd == ' ') {
+      return;
+    }
+
+    if (cmd == '1') {
+      // SERVO 1: Caja Dañada
+      digitalWrite(PIN_LED_STATUS, HIGH);
+      Serial.println("OK_SERVO_1_DANADA");
+      moverServo1(ANGULO_DESVIO);
+      delay(TIEMPO_EMPUJE_MS);
+      moverServo1(ANGULO_REPOSO);
+      digitalWrite(PIN_LED_STATUS, LOW);
+
+    } else if (cmd == '2') {
+      // SERVO 2: Producto No Esperado
+      digitalWrite(PIN_LED_STATUS, HIGH);
+      Serial.println("OK_SERVO_2_NO_ESPERADO");
+      moverServo2(ANGULO_DESVIO);
+      delay(TIEMPO_EMPUJE_MS);
+      moverServo2(ANGULO_REPOSO);
+      digitalWrite(PIN_LED_STATUS, LOW);
+
+    } else if (cmd == '0') {
+      // NORMAL: Pasa directo, servos en reposo
+      moverServo1(ANGULO_REPOSO);
+      moverServo2(ANGULO_REPOSO);
+      Serial.println("OK_NORMAL_REPOSO");
+
+    } else if (cmd == 'P') {
+      // PING de verificación desde el botón "ESP32: OBLIGATORIO"
+      digitalWrite(PIN_LED_STATUS, HIGH);
+      Serial.println("OK_ESP32_CONECTADO");
+      delay(60);
+      digitalWrite(PIN_LED_STATUS, LOW);
+
+    } else if (cmd == 'M') {
+      // Encender banda
+      encenderBanda(VELOCIDAD);
+      Serial.println("OK_BANDA_ENCENDIDA");
+
+    } else if (cmd == 'S') {
+      // Detener banda (paro de emergencia)
+      detenerBanda();
+      Serial.println("OK_BANDA_DETENIDA");
+    }
+  }
+}
